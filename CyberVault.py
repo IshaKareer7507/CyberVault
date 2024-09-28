@@ -1,6 +1,50 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import numpy as np
+from Crypto.Cipher import AES, DES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes
+
+# AES Encryption
+def aes_encrypt(text, key, rounds):
+    key = pad(key.encode(), AES.block_size)[:16]  # AES key must be 16, 24, or 32 bytes
+    cipher = AES.new(key, AES.MODE_CBC)  # Using CBC mode
+    iv = cipher.iv  # Initialization vector
+    encrypted_text = cipher.encrypt(pad(text.encode(), AES.block_size))
+    return (iv + encrypted_text).hex()  # Return hex string
+
+# AES Decryption
+def aes_decrypt(encrypted_text, key, rounds):
+    encrypted_text = bytes.fromhex(encrypted_text)  # Convert hex string back to bytes
+    key = pad(key.encode(), AES.block_size)[:16]
+    iv = encrypted_text[:AES.block_size]  # Extract the IV from the start
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    decrypted_text = unpad(cipher.decrypt(encrypted_text[AES.block_size:]), AES.block_size)
+    return decrypted_text.decode()
+
+# DES Encryption
+def des_encrypt(text, key, rounds):
+    key = pad(key.encode(), DES.block_size)[:8]  # DES key must be 8 bytes
+    cipher = DES.new(key, DES.MODE_CBC)
+    iv = cipher.iv
+    encrypted_text = cipher.encrypt(pad(text.encode(), DES.block_size))
+    return (iv + encrypted_text).hex()  # Convert to hex and return
+
+# DES Decryption
+def des_decrypt(encrypted_text, key, rounds):
+    encrypted_text = bytes.fromhex(encrypted_text)  # Convert hex string back to bytes
+    key = pad(key.encode(), DES.block_size)[:8]
+    iv = encrypted_text[:DES.block_size]  # Extract the IV from the start
+    cipher = DES.new(key, DES.MODE_CBC, iv)
+    decrypted_text = unpad(cipher.decrypt(encrypted_text[DES.block_size:]), DES.block_size)
+    return decrypted_text.decode()
+
+def mod_inverse(a, m):
+    """Calculate modular inverse of a with respect to m using Extended Euclidean Algorithm"""
+    for i in range(1, m):
+        if (a * i) % m == 1:
+            return i
+    return None
 
 # Vernam Cipher
 def vernam_cipher(text, key, decrypt=False):
@@ -25,6 +69,19 @@ def vernam_cipher(text, key, decrypt=False):
         else:
             result += text_char
     return result
+def matrix_mod_inverse(matrix, mod):
+    """Calculate the inverse of a matrix modulo mod"""
+    det = int(np.round(np.linalg.det(matrix)))  # Determinant of the matrix
+    det_inv = mod_inverse(det, mod)  # Modular inverse of the determinant
+
+    if det_inv is None:
+        raise ValueError("The matrix is not invertible")
+
+    # Matrix of minors, then transpose it (cofactor matrix)
+    matrix_minor = np.linalg.inv(matrix).T * det
+    matrix_adj = matrix_minor % mod  # Adjugate matrix
+
+    return (det_inv * matrix_adj) % mod
 
 # Playfair Cipher
 def playfair_cipher(text, key, decrypt=False):
@@ -88,21 +145,42 @@ def playfair_cipher(text, key, decrypt=False):
         result += playfair_pair(key_matrix, text[i], text[i + 1], decrypt)
     return result
 
-import numpy as np
-
 # Function to convert an alphabetic key to an integer matrix
 def alphabetic_key_to_matrix(key, size):
-    key = key.lower().replace('j', 'i')
-    alphabet = "abcdefghiklmnopqrstuvwxyz"
+    key = key.lower().replace('j', 'i')  # Convert to lowercase and handle 'j' -> 'i'
+    alphabet = "abcdefghijklmnopqrstuvwxyz"
     key_matrix = []
-    used = set()
+    
     for char in key:
-        if char not in used:
-            used.add(char)
+        if char in alphabet:
             key_matrix.append(alphabet.index(char))
+    
+    # Pad the key matrix if necessary to fit the matrix size (size x size)
     while len(key_matrix) < size * size:
-        key_matrix.append(alphabet.index('x'))
+        key_matrix.append(alphabet.index('x'))  # Padding with 'x' (which is 23)
+    
     return np.array(key_matrix).reshape((size, size))
+def decrypt(ciphertext, key_matrix):
+    """Decrypts the ciphertext using the given key matrix in Hill Cipher"""
+    n = len(key_matrix)  # Size of key matrix (n x n)
+    ciphertext = ciphertext.upper().replace(" ", "")
+    ciphertext_vector = [ord(char) - ord('A') for char in ciphertext]
+
+    # Pad ciphertext vector if necessary
+    while len(ciphertext_vector) % n != 0:
+        ciphertext_vector.append(0)
+
+    ciphertext_vector = np.array(ciphertext_vector).reshape(-1, n).T
+
+    # Compute the inverse key matrix modulo 26
+    key_matrix_inv = matrix_mod_inverse(key_matrix, 26)
+
+    # Decrypt the ciphertext by multiplying the inverse key matrix with ciphertext vector
+    decrypted_vector = np.dot(key_matrix_inv, ciphertext_vector) % 26
+    decrypted_vector = decrypted_vector.T.flatten()
+
+    decrypted_text = ''.join(chr(int(num) + ord('A')) for num in decrypted_vector)
+    return decrypted_text
 
 # Improved Hill Cipher function
 def hill_cipher(text, key_matrix, decrypt=False):
@@ -114,18 +192,22 @@ def hill_cipher(text, key_matrix, decrypt=False):
     def num_to_char(n):
         return chr(int(round(n)) % 26 + ord('a'))
 
+    # Calculate the modular inverse of the matrix
     def matrix_mod_inv(matrix, mod):
         det = int(round(np.linalg.det(matrix))) % mod
         det_inv = pow(det, -1, mod)
         matrix_adj = np.round(det_inv * np.linalg.inv(matrix)).astype(int) % mod
         return matrix_adj
 
+    # Prepare text by removing non-alphabetic characters and padding with 'x'
     def process_text(text):
         text = text.lower().replace('j', 'i')
-        while len(text) % size != 0:
-            text += 'x'
-        return text
+        processed_text = ''.join([c for c in text if c.isalpha()])
+        while len(processed_text) % size != 0:
+            processed_text += 'x'
+        return processed_text
 
+    # Apply the Hill Cipher matrix to the text
     def apply_cipher(text, matrix):
         vector = [char_to_num(c) for c in text]
         result = ""
@@ -134,7 +216,8 @@ def hill_cipher(text, key_matrix, decrypt=False):
             cipher_chunk = np.dot(matrix, chunk) % 26
             result += ''.join(num_to_char(num) for num in cipher_chunk)
         return result
-
+    
+    # Process the text and perform encryption or decryption
     text = process_text(text)
     if decrypt:
         key_matrix = matrix_mod_inv(key_matrix, 26)
@@ -160,14 +243,11 @@ def process_input():
             result = playfair_cipher(text, key, decrypt)
         elif sub_technique == "Hill":
             try:
-                if key.replace(" ", "").isalpha():
-                    size = int(np.sqrt(len(key.replace(" ", ""))))
-                    key_matrix = alphabetic_key_to_matrix(key, size)
-                else:
-                    key_matrix = np.array([int(x) for x in key.split()]).reshape((3, 3))
+                size = int(np.sqrt(len(key)))  # Determine size of the matrix (e.g., 3x3)
+                key_matrix = alphabetic_key_to_matrix(key, size)
                 result = hill_cipher(text, key_matrix, decrypt)
-            except Exception as e:
-                messagebox.showerror("Error", f"Invalid key or key matrix. Error: {str(e)}")
+            except:
+                messagebox.showerror("Error", "Invalid key matrix.")
                 return
         elif sub_technique == "Caesar":
             try:
@@ -178,6 +258,16 @@ def process_input():
                 return
         elif sub_technique == "Polyalphabetic":
             result = polyalphabetic_cipher(text, key, decrypt)
+        elif sub_technique == "AES":
+            if decrypt:
+                result = aes_decrypt(bytes.fromhex(text), key)
+            else:
+                result = aes_encrypt(text, key).hex()
+        elif sub_technique == "DES":
+            if decrypt:
+                result = des_decrypt(bytes.fromhex(text), key)
+            else:
+                result = des_encrypt(text, key).hex()
     elif technique == "Transposition":
         if sub_technique == "Rail Fence":
             try:
@@ -190,6 +280,7 @@ def process_input():
             result = columnar_transposition_cipher(text, key, decrypt)
     
     result_label.config(text=f"Result: {result}")
+
 
 # Caesar Cipher
 def caesar_cipher(text, shift, decrypt=False):
@@ -287,7 +378,6 @@ def columnar_transposition_cipher(text, key, decrypt=False):
         return ''.join(result)
 
 # Polyalphabetic Cipher (Vigenère Cipher)
-# Polyalphabetic Cipher (Vigenère Cipher) with improved decryption
 def polyalphabetic_cipher(text, key, decrypt=False):
     def repeat_key(text, key):
         key = (key * (len(text) // len(key))) + key[:len(text) % len(key)]
@@ -316,74 +406,107 @@ def polyalphabetic_cipher(text, key, decrypt=False):
 
     return result
 
+
 # Function to process input from the GUI
+
 def process_input():
     text = text_input.get("1.0", tk.END).strip()
     key = key_input.get().strip()
     technique = technique_choice.get()
     sub_technique = subtechnique_choice.get()
     action = action_choice.get()
+    rounds = int(round_input.get()) if round_input.get().isdigit() else None
 
     if action == "Encryption":
         decrypt = False
     else:
         decrypt = True
 
-    if technique == "Substitution":
-        if sub_technique == "Vernam":
-            result = vernam_cipher(text, key, decrypt)
-        elif sub_technique == "Playfair":
-            result = playfair_cipher(text, key, decrypt)
-        elif sub_technique == "Hill":
-            try:
-                key_matrix = np.array([int(x) for x in key.split()]).reshape((3, 3))
-                result = hill_cipher(text, key_matrix, decrypt)
-            except:
-                messagebox.showerror("Error", "Invalid key matrix.")
-                return
-        elif sub_technique == "Caesar":
-            try:
-                shift = int(key)
-                result = caesar_cipher(text, shift, decrypt)
-            except ValueError:
-                messagebox.showerror("Error", "Invalid shift value.")
-                return
-        elif sub_technique == "Polyalphabetic":
-            result = polyalphabetic_cipher(text, key, decrypt)
-    elif technique == "Transposition":
-        if sub_technique == "Rail Fence":
-            try:
-                key = int(key)
-                result = rail_fence_cipher(text, key, decrypt)
-            except ValueError:
-                messagebox.showerror("Error", "Invalid key value.")
-                return
-        elif sub_technique == "Columnar":
-            result = columnar_transposition_cipher(text, key, decrypt)
-    
-    result_label.config(text=f"Result: {result}")
+    try:
+        if technique == "Substitution":
+            if sub_technique == "Vernam":
+                result = vernam_cipher(text, key, decrypt)
+            elif sub_technique == "Playfair":
+                result = playfair_cipher(text, key, decrypt)
+            elif sub_technique == "Hill":
+                try:
+                    size = int(np.sqrt(len(key)))
+                    key_matrix = alphabetic_key_to_matrix(key, size)
+                    result = hill_cipher(text, key_matrix, decrypt)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Invalid key matrix: {str(e)}")
+                    return
+            elif sub_technique == "Caesar":
+                try:
+                    shift = int(key)
+                    result = caesar_cipher(text, shift, decrypt)
+                except ValueError:
+                    messagebox.showerror("Error", "Invalid shift value.")
+                    return
+            elif sub_technique == "Polyalphabetic":
+                result = polyalphabetic_cipher(text, key, decrypt)
 
+        elif technique == "AES":
+            if decrypt:
+                result = aes_decrypt(text, key, rounds)
+            else:
+                result = aes_encrypt(text, key, rounds)
+
+        elif technique == "DES":
+            if decrypt:
+                result = des_decrypt(text, key, rounds)
+            else:
+                result = des_encrypt(text, key, rounds)
+        elif technique == "Transposition":
+            if sub_technique == "Rail Fence":
+                try:
+                    key = int(key)
+                    result = rail_fence_cipher(text, key, decrypt)
+                except ValueError:
+                    messagebox.showerror("Error", "Invalid key value.")
+                    return
+            elif sub_technique == "Columnar":
+                result = columnar_transposition_cipher(text, key, decrypt)
+            
+        result_label.config(text=f"Result: {result}")
+
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
+# Function to update sub-techniques
 def update_subtechniques(*args):
     technique = technique_choice.get()
     if technique == "Substitution":
         subtechnique_menu['values'] = ["Vernam", "Caesar", "Playfair", "Hill", "Polyalphabetic"]
     elif technique == "Transposition":
         subtechnique_menu['values'] = ["Rail Fence", "Columnar"]
-    subtechnique_choice.set(subtechnique_menu['values'][0])
+        subtechnique_choice.set(subtechnique_menu['values'][0])
+        subtechnique_menu.grid(row=1, column=1, padx=10, pady=10)
+        round_label.grid_remove()
+        round_input.grid_remove()
+    elif technique == "AES" or technique == "DES":
+        subtechnique_menu.grid_remove()  # No sub-techniques for AES/DES
+        round_label.grid(row=5, column=0, padx=10, pady=10)
+        round_input.grid(row=5, column=1, padx=10, pady=10)
+    else:
+        subtechnique_menu.grid_remove()
+        round_label.grid_remove()
+        round_input.grid_remove()
 
-# GUI setup
+
+#GUI Setup
 root = tk.Tk()
-root.title("Encryption/Decryption Tool")
+root.title("CipherVault")
 
 # Technique selection
 tk.Label(root, text="Select Technique:").grid(row=0, column=0, padx=10, pady=10)
 technique_choice = tk.StringVar()
 technique_menu = ttk.Combobox(root, textvariable=technique_choice, state="readonly")
-technique_menu['values'] = ["Substitution", "Transposition"]
+technique_menu['values'] = ["Substitution", "AES", "DES", "Transposition"]
 technique_menu.grid(row=0, column=1, padx=10, pady=10)
 technique_menu.bind("<<ComboboxSelected>>", update_subtechniques)
 
-# Sub-technique selection
+# Sub-technique selection (appears only for Substitution)
 tk.Label(root, text="Select Sub-Technique:").grid(row=1, column=0, padx=10, pady=10)
 subtechnique_choice = tk.StringVar()
 subtechnique_menu = ttk.Combobox(root, textvariable=subtechnique_choice, state="readonly")
@@ -406,12 +529,19 @@ tk.Label(root, text="Enter Key:").grid(row=4, column=0, padx=10, pady=10)
 key_input = tk.Entry(root)
 key_input.grid(row=4, column=1, padx=10, pady=10)
 
+# Rounds input (for AES and DES only)
+round_label = tk.Label(root, text="Enter Number of Rounds:")
+round_input = tk.Entry(root)
+
 # Result label
 result_label = tk.Label(root, text="Result:")
-result_label.grid(row=6, column=0, columnspan=2, padx=10, pady=10)
+result_label.grid(row=7, column=0, columnspan=2, padx=10, pady=10)
 
 # Run button
 run_button = tk.Button(root, text="Run", command=process_input)
-run_button.grid(row=5, column=1, padx=10, pady=10)
+run_button.grid(row=6, column=1, padx=10, pady=10)
+
+footer_label = ttk.Label(root, text="© 2024 CipherVault By ISHA. All rights reserved.", anchor="center")
+footer_label.grid(row=8, column=0, columnspan=2, pady=10)
 
 root.mainloop()
